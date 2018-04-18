@@ -4,20 +4,22 @@
 #include <TinyGPS.h>
 #include <LowPower.h>
 
-#define NUMBER  "+33612345678"
-#define DEBUG   true
+#define GPS_RETRY 180
+#define NUMBER    "+33612345678"
+#define DEBUG     false
 
 volatile bool   shift, periodic = false;
 
 Sim800l         gsm;
 TinyGPS         gps;
 String          pos;
+String          last_pos;
 SoftwareSerial  nss(4, 5);
 
 void setup() {
-  //#if DEBUG
+#if DEBUG
   Serial.begin(9600);
-  //#endif
+#endif
   
   pinMode(2, INPUT);  // shift interruption
 
@@ -37,9 +39,9 @@ void setup() {
 
 void shiftHandler() {
   if (shift == false) {
-    #if DEBUG
+#if DEBUG
     Serial.println("shift handler");
-    #endif
+#endif
     shift = true;
   }
 }
@@ -47,33 +49,32 @@ void shiftHandler() {
 void periodicHandler() {
   static volatile unsigned int count = 0;
   if (periodic == false) {
-    #if DEBUG
+#if DEBUG
     Serial.println("periodic handler");
-    #endif
+#endif
     count++;
-    if (count == 2) { // Every 10 seconds
+    if (count == 60) { // Every 5 minutes
       periodic = true;
       count = 0;
     }
   }
 }
 
-void getPos() {      
+bool getPos() {      
     float lat, lon = 0;
     unsigned long fixAge = 0;
     bool gpsAvailable = false;
-    int max = 30;
 
     nss.begin(9600);
-    for (int i = 0; i < max; i++) {
-      #if DEBUG
-      Serial.print("check gps availability "); Serial.print(i); Serial.print("/"); Serial.println(max);
-      #endif
+    for (int i = 0; i < GPS_RETRY; i++) {
+#if DEBUG
+      Serial.print("check gps availability "); Serial.print(i); Serial.print("/"); Serial.println(GPS_RETRY);
+#endif
       while (nss.available()) {
         char c = nss.read();
-        #if DEBUG
+#if DEBUG
         Serial.print(c);
-        #endif
+#endif
         if (gps.encode(c)) {
           gpsAvailable = true;
           
@@ -87,68 +88,80 @@ void getPos() {
       #endif
       
       if (gpsAvailable) {
-        #if DEBUG
+#if DEBUG
         Serial.println("gps is available");
-        #endif
+#endif
         break;
       }
-      #if DEBUG
+#if DEBUG
       else {
         Serial.println("gps is not available");
       }
-      #endif  
+#endif  
       delay(1000);    
     }
 
     if (gpsAvailable) {
       pos = "http://maps.google.com/maps?q=" + String(lat, 5) + "," + String(lon, 5);
-    } else {
-      pos = "";
+      last_pos = pos;
+      return true;
     }
+    pos = last_pos;
+    return false;
 }
 
 void sendMsg(String msg) {
+#if DEBUG
   Serial.println(msg);
+#endif
+  
   gsm.begin(10, 11, 9);
+  delay(1000);
   gsm.sendSms(NUMBER, msg.c_str());
-  Serial.println("end sending sms");
+
+#if DEBUG
+  Serial.println("sms sent");
+#endif
 }
 
 void loop() { 
-  #if DEBUG
+#if DEBUG
   Serial.println("loop");
-  #endif
+#endif
   
   if (shift) {
-    #if DEBUG
+#if DEBUG
     Serial.println("shift action");
-    #endif
+#endif
     
-    getPos();
-    sendMsg("Mouvement detecte. La ruche se trouve ici : " + pos);
+    if (getPos())
+      sendMsg("LA RUCHE A BOUGE : " + pos);
+    else
+      sendMsg("LA RUCHE A BOUGE, ANCIENNE POSITION : " + pos);
     shift = false;
   }
 
   if (periodic) {
-    #if DEBUG
+#if DEBUG
     Serial.println("periodic action");
-    #endif
+#endif
 
-    
     String msg = gsm.readSms(1);
     
     if (msg.indexOf("OK") != -1) {
       String sender = gsm.getNumberSms(1);
-      #if DEBUG
+      
+#if DEBUG
       Serial.println("a sms is received from:" + sender);
-      #endif
-      if (sender.indexOf(NUMBER) != -1 && msg.indexOf("ruche") != -1) {
-        getPos();
-        sendMsg("La ruche se trouve ici : " + pos);
-      } else {
-      #if DEBUG
+#endif
+      if (sender.indexOf(NUMBER) != -1 && msg.indexOf("Ruche") != -1) {
+        if (getPos())
+          sendMsg(pos);
+        else
+          sendMsg("ANCIENNE POSITION : " + pos);
+#if DEBUG
         Serial.println("invalid sms. skip action");
-      #endif
+#endif
       }
       gsm.delAllSms();
     }
